@@ -70,6 +70,7 @@ void DroidMediaBufferQueueListener::setCallbacks(DroidMediaBufferQueueCallbacks 
 }
 
 _DroidMediaBufferQueue::_DroidMediaBufferQueue(const char *name) {
+    ALOGE("_DroidMediaBufferQueue::_DroidMediaBufferQueue name:%s",name);
 #if ANDROID_MAJOR == 5
   android::BufferQueue::createBufferQueue(&m_producer, &m_queue);
 #elif ANDROID_MAJOR == 4 && (ANDROID_MINOR == 4 || ANDROID_MINOR == 2)
@@ -81,7 +82,9 @@ _DroidMediaBufferQueue::_DroidMediaBufferQueue(const char *name) {
 #if (ANDROID_MAJOR == 4 && ANDROID_MINOR == 4) || ANDROID_MAJOR == 5
   // We need to acquire up to 2 buffers
   // One is being rendered and the other one is waiting to be rendered.
-  m_queue->setMaxAcquiredBufferCount(2);
+  // got error 0x3D and irc logs advised to increase this value 
+  // sometimes the error comes back so not sure if it helped
+  m_queue->setMaxAcquiredBufferCount(4); 
 #else
   m_queue->setSynchronousMode(false);
 #endif

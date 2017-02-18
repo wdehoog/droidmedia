@@ -31,10 +31,16 @@ public:
 							  android::PixelFormat format, uint32_t usage,
 							  android::status_t* error);
 
+#if defined(BACON_VDEC_HACK)
+  int computeBufferSize(uint32_t w, uint32_t h);
+#endif
+
   void setGraphicBufferSize(int size);
 
 private:
   int m_size;
+  uint32_t prev_w;
+  uint32_t prev_h;
 };
 
 #endif /* DROID_MEDIA_ALLOCATOR_H */

@@ -15,6 +15,9 @@
  *
  * Authored by: Mohammed Hassan <mohammed.hassan@jolla.com>
  */
+#define LOG_NDEBUG 0
+#define LOG_TAG "DroidMediaCamera"
+#include <utils/Log.h>
 
 #include "droidmediacamera.h"
 #include "allocator.h"
@@ -358,7 +361,10 @@ bool droid_media_camera_send_command(DroidMediaCamera *camera, int32_t cmd, int3
 
 bool droid_media_camera_store_meta_data_in_buffers(DroidMediaCamera *camera, bool enabled)
 {
-    return camera->m_camera->storeMetaDataInBuffers(enabled) == android::NO_ERROR;
+    int err = camera->m_camera->storeMetaDataInBuffers(enabled);
+    //if(err != android::NO_ERROR)
+        ALOGE("droid_media_camera_store_meta_data_in_buffers err=%d(0x%X)", err, err);
+    return err == android::NO_ERROR;
 }
 
 void droid_media_camera_set_preview_callback_flags(DroidMediaCamera *camera, int preview_callback_flag)

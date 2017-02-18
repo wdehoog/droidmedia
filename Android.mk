@@ -44,11 +44,13 @@ LOCAL_SHARED_LIBRARIES := libc \
                           libcamera_client \
                           libgui \
                           libui \
+                          liblog \
                           libbinder \
                           libstagefright \
                           libstagefright_foundation \
                           libmedia
 LOCAL_CPPFLAGS=-DANDROID_MAJOR=$(ANDROID_MAJOR) -DANDROID_MINOR=$(ANDROID_MINOR) -DANDROID_MICRO=$(ANDROID_MICRO)
+LOCAL_CPPFLAGS += -DBACON_VDEC_HACK
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE := libdroidmedia
 LOCAL_C_INCLUDES := frameworks/native/include/media/openmax
@@ -58,9 +60,11 @@ include $(CLEAR_VARS)
 LOCAL_SRC_FILES := minimedia.cpp
 LOCAL_C_INCLUDES := frameworks/av/services/camera/libcameraservice \
                     frameworks/av/media/libmediaplayerservice \
+                    frameworks/av/services/audiopolicy \
                     system/media/camera/include
 LOCAL_SHARED_LIBRARIES := libcameraservice \
                           libmediaplayerservice \
+                          libaudiopolicyservice \
                           libutils \
                           libbinder \
                           libgui \
@@ -77,9 +81,11 @@ LOCAL_SHARED_LIBRARIES := libutils \
                           libbinder \
                           libgui \
                           libcutils \
+                          liblog \
                           libui
 LOCAL_MODULE_TAGS := optional
 LOCAL_CPPFLAGS := -DANDROID_MAJOR=$(ANDROID_MAJOR) -DANDROID_MINOR=$(ANDROID_MINOR) -DANDROID_MICRO=$(ANDROID_MICRO)
+LOCAL_CPPFLAGS += -DBACON_VDEC_HACK
 ifneq ($(CM_BUILD),)
 LOCAL_CPPFLAGS += -DCM_BUILD
 endif

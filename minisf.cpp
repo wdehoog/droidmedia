@@ -16,6 +16,9 @@
  * Authored by: Mohammed Hassan <mohammed.hassan@jolla.com>
  */
 
+#define LOG_NDEBUG 0
+#define LOG_TAG "minisfservice"
+
 #include <binder/IPCThreadState.h>
 #include <binder/ProcessState.h>
 #include <binder/IServiceManager.h>
