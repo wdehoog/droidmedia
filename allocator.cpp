@@ -19,8 +19,11 @@
 #define LOG_NDEBUG 0
 #define LOG_TAG "minisfservice"
 
+#if ANDROID_MAJOR < 8
 #include "allocator.h"
 #include <ui/GraphicBuffer.h>
+
+#define LOG_TAG "DroidMediaAllocator"
 
 DroidMediaAllocator::DroidMediaAllocator() :
     m_size(0), prev_w(0), prev_h(0)
@@ -71,6 +74,9 @@ invalid_input:
 android::sp<android::GraphicBuffer>
 DroidMediaAllocator::createGraphicBuffer(uint32_t w, uint32_t h,
                                          android::PixelFormat format, uint32_t usage,
+#if ANDROID_MAJOR >= 7 && ANDROID_MINOR >= 1
+                                                          std::string requestorName,
+#endif
                                          android::status_t* error)
 {
     int s;
@@ -126,17 +132,19 @@ ALOGE("DroidMediaAllocator::createGraphicBuffer(w=%d, h=%d, f=0x%X, u=%d) m_size
       ALOGE("DroidMediaAllocator leave buffer size to libstagefright");
       graphicBuffer = new android::GraphicBuffer(w, h, format, usage);
     }
-#elif (ANDROID_MAJOR == 4 && ANDROID_MINOR >= 2) || ANDROID_MAJOR == 5
-    graphicBuffer = new android::GraphicBuffer(w, h, format, usage);
+#elif (ANDROID_MAJOR == 4 && ANDROID_MINOR < 2)
+    graphicBuffer(new android::GraphicBuffer(w, h, format,
+                                             usage, m_size));
 #else
-    graphicBuffer = new android::GraphicBuffer(w, h, format, usage, m_size);
+    graphicBuffer(new android::GraphicBuffer(w, h, format,
+                                             usage));
 #endif
     android::status_t err = graphicBuffer->initCheck();
 
     *error = err;
 
     if (err != android::NO_ERROR || graphicBuffer->handle == 0) {
-        ALOGE("DroidMediaAllocator::createGraphicBuffer(w=%d, h=%d) "
+        ALOGE("createGraphicBuffer(w=%d, h=%d) "
               "failed (%s), handle=%p, format=0x%x, usage=0x%x, size=%d",
               w, h, strerror(-err), graphicBuffer->handle, format, usage, m_size);
         return 0;
@@ -150,3 +158,4 @@ void DroidMediaAllocator::setGraphicBufferSize(int size)
 ALOGE("DroidMediaAllocator::setGraphicBufferSize(size=%d)", size);
     m_size = size;
 }
+#endif

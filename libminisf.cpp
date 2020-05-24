@@ -16,9 +16,6 @@
  * Authored by: Mohammed Hassan <mohammed.hassan@jolla.com>
  */
 
-#define LOG_NDEBUG 0
-#define LOG_TAG "minisfservice"
-
 #include <binder/IPCThreadState.h>
 #include <binder/ProcessState.h>
 #include <binder/IServiceManager.h>
@@ -31,26 +28,21 @@
 
 using namespace android;
 
-int
-main(int, char**)
+extern "C"
+void startMiniSurfaceFlinger()
 {
     sp<ProcessState> proc(ProcessState::self());
     sp<IServiceManager> sm = defaultServiceManager();
 
-    MiniSurfaceFlinger::instantiate();
-
-// Android 4 will not allow system services to be run from minimediaservice. So keep them here instead.
-
-#if (ANDROID_MAJOR == 4)
-    FakePermissionController::instantiate();
-#if (ANDROID_MINOR == 4)
-    FakeAppOps::instantiate();
-#endif
-#endif
-
+    if (sm->checkService(String16("SurfaceFlinger")) == NULL)
+    {
+        MiniSurfaceFlinger::instantiate();
+    }
+    else
+    {
+        ALOGW("SurfaceFlinger service already running, so we won't start it here. If you have trouble with media, try disabling the minisf service.");
+    }
 
     ProcessState::self()->startThreadPool();
-    IPCThreadState::self()->joinThreadPool();
 
-    return 0;
 }

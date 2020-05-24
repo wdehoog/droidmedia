@@ -18,6 +18,9 @@
 
 using namespace android;
 
+#include <gui/ISurfaceComposer.h>
+#include <gui/IDisplayEventConnection.h>
+
 class MiniSurfaceFlinger : public BinderService<MiniSurfaceFlinger>,
                            public BnSurfaceComposer,
                            public IBinder::DeathRecipient
@@ -78,4 +81,24 @@ public:
     bool authenticateSurfaceTexture(const sp<ISurfaceTexture>& surface) const {
         return false;
     }
+};
+
+#include <binder/IPermissionController.h>
+
+class FakePermissionController : public BinderService<FakePermissionController>,
+                                 public BnPermissionController
+{
+public:
+    static char const *getServiceName() {
+        return "permission";
+    }
+
+    bool checkPermission(const String16& permission, int32_t, int32_t) {
+        if (permission == String16("android.permission.CAMERA")) {
+            return true;
+        }
+
+        return false;
+    }
+
 };

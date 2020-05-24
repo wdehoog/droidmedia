@@ -23,10 +23,28 @@
 #include <AudioPolicyService.h>
 #include <binder/MemoryHeapBase.h>
 #include <MediaPlayerService.h>
+#if ANDROID_MAJOR >= 6
+#include <binder/BinderService.h>
+#if ANDROID_MAJOR < 7
+#include <camera/ICameraService.h>
+#else
+#include <android/hardware/ICameraService.h>
+#endif
+#include <binder/IInterface.h>
+#include <cutils/multiuser.h>
+#endif
+#if ANDROID_MAJOR < 8
+#include "allocator.h"
+#endif
+#include "services/services.h"
 
-// echo "persist.camera.shutter.disable=1" >> /system/build.prop
+#include <cutils/properties.h>
+
+#define LOG_TAG "MinimediaService"
 
 using namespace android;
+
+#define BINDER_SERVICE_CHECK_INTERVAL 500000
 
 int
 main(int, char**)
@@ -34,9 +52,55 @@ main(int, char**)
     sp<ProcessState> proc(ProcessState::self());
     sp<IServiceManager> sm = defaultServiceManager();
 
+    // Disable things which break hybris once and for all.
+    property_set("persist.camera.shutter.disable", "1");
+    property_set("persist.media.metrics.enabled", "0");
+    property_set("camera.fifo.disable", "1");
+
     MediaPlayerService::instantiate();
     CameraService::instantiate();
     AudioPolicyService::instantiate();
+
+// PermissionController and AppOps are needed on Android 4, but aren't allowed to be run here.
+#if ANDROID_MAJOR >= 5
+    FakePermissionController::instantiate();
+    FakeAppOps::instantiate();
+    FakeBatteryStats::instantiate();
+    FakeSensorServer::instantiate();
+#endif
+
+#if ANDROID_MAJOR >= 6
+    FakeResourceManagerService::instantiate();
+    FakeProcessInfoService::instantiate();
+#if ANDROID_MAJOR < 8
+    FakeCameraServiceProxy::instantiate();
+#endif
+    // Camera service needs to be told which users may use the camera
+    sp<IBinder> binder;
+    do {
+        binder = sm->getService(String16("media.camera"));
+        if (binder != NULL) {
+            break;
+        }
+        ALOGW("Camera service is not yet available, waiting...");
+        usleep(BINDER_SERVICE_CHECK_INTERVAL);
+    } while (true);
+    ALOGD("Allowing use of the camera for users root and bin");
+#if ANDROID_MAJOR >= 8
+    sp<android::frameworks::sensorservice::V1_0::ISensorManager> sensorManager = new FakeSensorManager;
+    status_t status = sensorManager->registerAsService();
+#endif
+#if ANDROID_MAJOR >= 7
+    sp<hardware::ICameraService> gCameraService = interface_cast<hardware::ICameraService>(binder);
+    std::vector<int32_t> users = {0, 1};
+    gCameraService->notifySystemEvent(1, users);
+#else
+    sp<ICameraService> gCameraService = interface_cast<ICameraService>(binder);
+    int32_t users[2];
+    users[0] = 0; users[1] = 1;
+    gCameraService->notifySystemEvent(1, users, 2);
+#endif
+#endif
 
     ProcessState::self()->startThreadPool();
     IPCThreadState::self()->joinThreadPool();

@@ -16,7 +16,6 @@
  * Authored by: Mohammed Hassan <mohammed.hassan@jolla.com>
  */
 
-
 using namespace android;
 
 #include <gui/ISurfaceComposer.h>
@@ -100,6 +99,10 @@ public:
 			   , bool
 #endif
 			   ) {
+        return BAD_VALUE;
+    }
+
+    virtual status_t getDisplayInfoEx(const sp<IBinder>& display, DisplayInfoEx* info) {
         return BAD_VALUE;
     }
 

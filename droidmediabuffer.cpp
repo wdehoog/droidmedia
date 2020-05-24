@@ -19,13 +19,19 @@
 #include "droidmediabuffer.h"
 #include "private.h"
 
-#if ANDROID_MAJOR == 5
-static const int staleBuffer = android::IGraphicBufferConsumer::STALE_BUFFER_SLOT;
-#else
+#define LOG_TAG "DroidMediaBuffer"
+
+#if ANDROID_MAJOR < 5
 static const int staleBuffer = android::BufferQueue::STALE_BUFFER_SLOT;
+#else
+static const int staleBuffer = android::IGraphicBufferConsumer::STALE_BUFFER_SLOT;
 #endif
 
+#if ANDROID_MAJOR < 6
 _DroidMediaBuffer::_DroidMediaBuffer(android::BufferQueue::BufferItem& buffer,
+#else
+_DroidMediaBuffer::_DroidMediaBuffer(android::BufferItem& buffer,
+#endif
 				     android::sp<DroidMediaBufferQueue> queue,
 				     void *data,
 				     DroidMediaCallback ref,
@@ -37,7 +43,11 @@ _DroidMediaBuffer::_DroidMediaBuffer(android::BufferQueue::BufferItem& buffer,
     m_timestamp(buffer.mTimestamp),
     m_frameNumber(buffer.mFrameNumber),
     m_crop(buffer.mCrop),
+#if ANDROID_MAJOR >= 6
+    m_slot(buffer.mSlot),
+#else
     m_slot(buffer.mBuf),
+#endif
     m_data(data),
     m_ref(ref),
     m_unref(unref)
@@ -114,7 +124,7 @@ DroidMediaBuffer *droid_media_buffer_create_from_raw_data(uint32_t w, uint32_t h
   android::status_t err = buffer->initCheck();
 
   if (err != android::NO_ERROR) {
-    ALOGE("DroidMediaBuffer: Error 0x%x allocating buffer", -err);
+    ALOGE("Error 0x%x allocating buffer", -err);
     buffer.clear();
     return NULL;
   }
@@ -122,7 +132,7 @@ DroidMediaBuffer *droid_media_buffer_create_from_raw_data(uint32_t w, uint32_t h
   err = buffer->lock(android::GraphicBuffer::USAGE_SW_READ_RARELY
 		     | android::GraphicBuffer::USAGE_SW_WRITE_RARELY, &addr);
   if (err != android::NO_ERROR) {
-    ALOGE("DroidMediaBuffer: Error 0x%x locking buffer", -err);
+    ALOGE("Error 0x%x locking buffer", -err);
     buffer.clear();
     return NULL;
   }
@@ -158,13 +168,33 @@ DroidMediaBuffer *droid_media_buffer_create_from_raw_data(uint32_t w, uint32_t h
 out:
   err = buffer->unlock();
   if (err != android::NO_ERROR) {
-    ALOGE("DroidMediaBuffer: Error 0x%x unlocking buffer", -err);
+    ALOGE("Error 0x%x unlocking buffer", -err);
     buffer.clear();
     return NULL;
   }
 
   return new DroidMediaBuffer(buffer, cb->data, cb->ref, cb->unref);
 }
+
+DroidMediaBuffer *droid_media_buffer_create(uint32_t w, uint32_t h,
+					    uint32_t format,
+					    DroidMediaBufferCallbacks *cb)
+{
+  android::sp<android::GraphicBuffer>
+    buffer(new android::GraphicBuffer(w, h, format,
+				      android::GraphicBuffer::USAGE_HW_TEXTURE));
+
+  android::status_t err = buffer->initCheck();
+
+  if (err != android::NO_ERROR) {
+    ALOGE("Error 0x%x allocating buffer", -err);
+    buffer.clear();
+    return NULL;
+  }
+
+  return new DroidMediaBuffer(buffer, cb->data, cb->ref, cb->unref);
+}
+
 
 void droid_media_buffer_release(DroidMediaBuffer *buffer,
                                 EGLDisplay display, EGLSyncKHR fence)
@@ -182,15 +212,47 @@ void droid_media_buffer_release(DroidMediaBuffer *buffer,
         break;
 
     case staleBuffer:
-        ALOGW("DroidMediaBuffer: Released stale buffer %d", buffer->m_slot);
+        ALOGW("Released stale buffer %d", buffer->m_slot);
         break;
 
     default:
-        ALOGE("DroidMediaBuffer: Error 0x%x releasing buffer %d", -err, buffer->m_slot);
+        ALOGE("Error 0x%x releasing buffer %d", -err, buffer->m_slot);
         break;
     }
 
     delete buffer;
+}
+
+void *droid_media_buffer_lock(DroidMediaBuffer *buffer, uint32_t flags)
+{
+  int usage = 0;
+  void *addr = NULL;
+  android::status_t err;
+
+  if (flags & DROID_MEDIA_BUFFER_LOCK_READ) {
+    usage |= android::GraphicBuffer::USAGE_SW_READ_RARELY;
+  }
+  if (flags & DROID_MEDIA_BUFFER_LOCK_WRITE) {
+    usage |= android::GraphicBuffer::USAGE_SW_WRITE_RARELY;
+  }
+
+  err = buffer->m_buffer->lock(usage, &addr);
+
+  if (err != android::NO_ERROR) {
+    ALOGE("Error 0x%x locking buffer", -err);
+    return NULL;
+  } else {
+    return addr;
+  }
+}
+
+void droid_media_buffer_unlock(DroidMediaBuffer *buffer)
+{
+  android::status_t err = buffer->m_buffer->unlock();
+
+  if (err != android::NO_ERROR) {
+    ALOGE("Error 0x%x unlocking buffer", -err);
+  }
 }
 
 uint32_t droid_media_buffer_get_transform(DroidMediaBuffer * buffer)
@@ -234,6 +296,11 @@ uint32_t droid_media_buffer_get_height(DroidMediaBuffer * buffer)
     return buffer->height;
 }
 
+const void *droid_media_buffer_get_handle(DroidMediaBuffer *buffer)
+{
+    return buffer->handle;
+}
+
 void droid_media_buffer_get_info(DroidMediaBuffer *buffer, DroidMediaBufferInfo *info)
 {
     info->width = buffer->width;
@@ -243,6 +310,8 @@ void droid_media_buffer_get_info(DroidMediaBuffer *buffer, DroidMediaBufferInfo 
     info->timestamp = buffer->m_timestamp;
     info->frame_number = buffer->m_frameNumber;
     info->crop_rect = droid_media_buffer_get_crop_rect(buffer);
+    info->format = buffer->format;
+    info->stride = buffer->stride;
 }
 
 };

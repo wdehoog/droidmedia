@@ -50,6 +50,7 @@ typedef struct {
   int32_t fps;
   int32_t channels;
   int32_t sample_rate;
+  int32_t hal_format;
   DroidMediaCodecFlags flags;
 } DroidMediaCodecMetaData;
 
@@ -64,7 +65,7 @@ typedef struct {
 
   int32_t color_format;
   int32_t bitrate;
-  bool meta_data;
+  int32_t meta_data;
   int32_t stride;
   int32_t slice_height;
   int32_t max_input_size;
