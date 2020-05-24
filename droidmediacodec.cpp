@@ -16,7 +16,9 @@
  * Authored by: Mohammed Hassan <mohammed.hassan@jolla.com>
  */
 
-#if ANDROID_MAJOR >= 8
+#if ANDROID_MAJOR >= 9
+#include <media/stagefright/omx/1.0/Omx.h>
+#elif ANDROID_MAJOR >= 8
 #include <media/stagefright/omx/OMX.h>
 #else
 #include <media/stagefright/OMXClient.h>
@@ -42,10 +44,15 @@
 #include <media/stagefright/SimpleDecodingSource.h>
 #endif
 
+#if ANDROID_MAJOR >= 9
+#include <media/MediaSource.h>
+#else
 #include <media/stagefright/MediaSource.h>
+#endif
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/MediaDefs.h>
 #include <gui/BufferQueue.h>
+#include <inttypes.h>
 #include "droidmediacodec.h"
 #if ANDROID_MAJOR < 8
 #include "allocator.h"
@@ -53,6 +60,7 @@
 #include "private.h"
 #include "droidmediabuffer.h"
 
+#undef LOG_TAG
 #define LOG_TAG "DroidMediaCodec"
 #define DROID_MEDIA_CODEC_MAX_INPUT_BUFFERS 5
 
@@ -66,6 +74,9 @@ struct DroidMediaCodecMetaDataKey {
     int key;
     int type;
 } metaDataKeys[] = {
+#if ANDROID_MAJOR >= 5
+    {android::MEDIA_MIMETYPE_VIDEO_HEVC, android::kKeyHVCC, android::kKeyHVCC},
+#endif
     {android::MEDIA_MIMETYPE_VIDEO_MPEG4, android::kKeyESDS, android::kTypeESDS},
     {android::MEDIA_MIMETYPE_AUDIO_AAC, android::kKeyESDS, android::kTypeESDS},
     {android::MEDIA_MIMETYPE_VIDEO_AVC, android::kKeyAVCC, android::kTypeAVCC},
@@ -83,13 +94,24 @@ class Source : public android::MediaSource {
 public:
     Source(android::sp<android::MetaData>& metaData) :
         m_metaData(metaData),
-        m_running(false)
+        m_running(false),
+        m_draining(false)
     {
     }
 
     void unlock() {
         m_framesReceived.lock.lock();
-        m_framesReceived.cond.signal();
+        m_framesReceived.cond.broadcast();
+        m_framesReceived.lock.unlock();
+    }
+
+    // After this is called all new buffers will be rejected. get() will still return any already
+    // queued buffers but once the queue has been emptied it will return a null buffer indicating
+    // the end of the stream. There is no coming back from this.
+    void drain() {
+        m_framesReceived.lock.lock();
+        m_draining = true;
+        m_framesReceived.cond.broadcast();
         m_framesReceived.lock.unlock();
     }
 
@@ -98,58 +120,75 @@ public:
 
         // drain buffer gets added without checking to avoid a deadlock
 
+        while (!m_draining) {
         // TODO: I am not sure this is the right approach here.
-        if (buffer && m_framesReceived.buffers.size() >= DROID_MEDIA_CODEC_MAX_INPUT_BUFFERS) {
+            if (m_framesReceived.buffers.size() < DROID_MEDIA_CODEC_MAX_INPUT_BUFFERS) {
+                m_framesReceived.buffers.push_back(buffer);
+                m_framesReceived.cond.signal();
+                m_framesReceived.lock.unlock();
+
+                return;
+            }
             // either get() will signal us or we will be signaled in case of an error
             m_framesReceived.cond.wait(m_framesReceived.lock);
         }
 
-        m_framesReceived.buffers.push_back(buffer);
-        m_framesReceived.cond.signal();
         m_framesReceived.lock.unlock();
+
+        buffer->release();
     }
 
     android::MediaBuffer *get() {
         m_framesReceived.lock.lock();
 
-        while (m_running && m_framesReceived.buffers.empty()) {
+        for (;;) {
+            if (!m_running) {
+                m_framesReceived.lock.unlock();
+                return NULL;
+            }
+
+            if (!m_framesReceived.buffers.empty()) {
+                android::List<android::MediaBuffer *>::iterator iter = m_framesReceived.buffers.begin();
+                android::MediaBuffer *buffer = *iter;
+
+                m_framesReceived.buffers.erase(iter);
+
+                m_framesReceived.cond.signal();
+
+                m_framesReceived.lock.unlock();
+
+                m_framesBeingProcessed.lock.lock();
+                m_framesBeingProcessed.buffers.push_back(buffer);
+                m_framesBeingProcessed.lock.unlock();
+
+                return buffer;
+            }
+
+            if (m_draining) {
+                m_framesReceived.lock.unlock();
+
+                return NULL;
+            }
+
             m_framesReceived.cond.wait(m_framesReceived.lock);
         }
 
-        if (!m_running) {
-            m_framesReceived.lock.unlock();
-            return NULL;
-        }
-
-        android::List<android::MediaBuffer *>::iterator iter = m_framesReceived.buffers.begin();
-        android::MediaBuffer *buffer = *iter;
-
-        m_framesReceived.buffers.erase(iter);
-
-        m_framesReceived.cond.signal();
-
-        m_framesReceived.lock.unlock();
-
-        if (buffer != NULL) {
-            m_framesBeingProcessed.lock.lock();
-            m_framesBeingProcessed.buffers.push_back(buffer);
-            m_framesBeingProcessed.lock.unlock();
-        }
-
-        return buffer;
+        // unreachable
+        return NULL;
     }
 
     void removeProcessedBuffer(android::MediaBuffer *buffer) {
+        m_framesBeingProcessed.lock.lock();
         for (android::List<android::MediaBuffer *>::iterator iter = m_framesBeingProcessed.buffers.begin();
              iter != m_framesBeingProcessed.buffers.end(); iter++) {
             if (*iter == buffer) {
-                m_framesBeingProcessed.buffers.erase(iter);
-                m_framesBeingProcessed.lock.lock();
+                m_framesBeingProcessed.buffers.erase(iter);                
                 m_framesBeingProcessed.cond.signal();
                 m_framesBeingProcessed.lock.unlock();
                 return;
             }
         }
+        m_framesBeingProcessed.lock.unlock();
 
         ALOGW("A buffer we don't know about is being finished!");
     }
@@ -197,7 +236,7 @@ private:
         m_framesBeingProcessed.lock.lock();
 
         while (!m_framesBeingProcessed.buffers.empty()) {
-            ALOGW("stop(): waiting for %d frames", m_framesBeingProcessed.buffers.size());
+            ALOGW("stop(): waiting for %zu frames", m_framesBeingProcessed.buffers.size());
             m_framesBeingProcessed.cond.wait(m_framesBeingProcessed.lock);
         }
 
@@ -206,7 +245,11 @@ private:
         return android::OK;
     }
 
+#if ANDROID_MAJOR >= 9
+    android::status_t read(android::MediaBufferBase **buffer,
+#else
     android::status_t read(android::MediaBuffer **buffer,
+#endif
                            const android::MediaSource::ReadOptions *options DM_UNUSED = NULL) {
         *buffer = get();
 
@@ -219,6 +262,7 @@ private:
 
     android::sp<android::MetaData> m_metaData;
     bool m_running;
+    bool m_draining;
     Buffers m_framesReceived;
     Buffers m_framesBeingProcessed;
 };
@@ -258,7 +302,11 @@ struct _DroidMediaCodec : public android::MediaBufferObserver
 #endif
     }
 
+#if ANDROID_MAJOR >= 9
+    void signalBufferReturned(android::MediaBufferBase *buff)
+#else
     void signalBufferReturned(android::MediaBuffer *buff)
+#endif
     {
         InputBuffer *buffer = (InputBuffer *) buff;
 
@@ -489,6 +537,27 @@ public:
     }
   }
 
+  static uint32_t flags(DroidMediaCodecMetaData *meta, uint32_t currentFlags) {
+    // We will not do any validation for the flags. Stagefright should take care of that.
+    if (meta->flags & DROID_MEDIA_CODEC_SW_ONLY) {
+#if ANDROID_MAJOR < 7
+      currentFlags |= android::OMXCodec::kSoftwareCodecsOnly;
+#else
+      currentFlags |= android::MediaCodecList::kPreferSoftwareCodecs;
+#endif
+    }
+
+    if (meta->flags & DROID_MEDIA_CODEC_HW_ONLY) {
+#if ANDROID_MAJOR < 7
+      currentFlags |= android::OMXCodec::kHardwareCodecsOnly;
+#else
+      currentFlags |= android::MediaCodecList::kHardwareCodecsOnly;
+#endif
+    }
+
+    return currentFlags;
+  }
+
 private:
   android::sp<android::MetaData> buildMetaData(DroidMediaCodecEncoderMetaData *meta) {
     android::sp<android::MetaData> md(new android::MetaData);
@@ -558,27 +627,6 @@ private:
     SET_PARAM(kKeySampleRate, sample_rate);
 
     return md;
-  }
-
-  uint32_t flags(DroidMediaCodecMetaData *meta, uint32_t currentFlags) {
-    // We will not do any validation for the flags. Stagefright should take care of that.
-    if (meta->flags & DROID_MEDIA_CODEC_SW_ONLY) {
-#if ANDROID_MAJOR < 7
-      currentFlags |= android::OMXCodec::kSoftwareCodecsOnly;
-#else
-      currentFlags |= android::MediaCodecList::kPreferSoftwareCodecs;
-#endif
-    }
-
-    if (meta->flags & DROID_MEDIA_CODEC_HW_ONLY) {
-#if ANDROID_MAJOR < 7
-      currentFlags |= android::OMXCodec::kHardwareCodecsOnly;
-#else
-      currentFlags |= android::MediaCodecList::kHardwareCodecsOnly;
-#endif
-    }
-
-    return currentFlags;
   }
 
   DroidMediaCodecEncoderMetaData *m_enc;
@@ -675,6 +723,29 @@ DroidMediaCodec *droid_media_codec_create_encoder(DroidMediaCodecEncoderMetaData
   return droid_media_codec_create(builder);
 }
 
+bool droid_media_codec_is_supported(DroidMediaCodecMetaData *meta, bool encoder)
+{
+#if ANDROID_MAJOR == 4 && ANDROID_MINOR < 2
+    android::Vector<android::String8> matchingCodecs;
+#elif ANDROID_MAJOR < 7
+    android::Vector<android::OMXCodec::CodecNameAndQuirks> matchingCodecs;
+#else
+    android::Vector<android::AString> matchingCodecs;
+#endif
+
+#if ANDROID_MAJOR < 7
+    android::OMXCodec::findMatchingCodecs(
+            meta->type, encoder, NULL,
+#else
+    android::MediaCodecList::findMatchingCodecs(
+            meta->type, encoder,
+#endif
+            DroidMediaCodecBuilder::flags(meta, 0),
+            &matchingCodecs);
+
+    return matchingCodecs.size() > 0;
+}
+
 bool droid_media_codec_start(DroidMediaCodec *codec)
 {
 #if ANDROID_MAJOR < 7
@@ -726,6 +797,9 @@ void droid_media_codec_stop(DroidMediaCodec *codec)
         ALOGE("error 0x%x stopping codec", -err);
     }
 
+    if (codec->m_queue.get()) {
+        codec->m_queue->buffersReleased();
+     }
 }
 
 void droid_media_codec_destroy(DroidMediaCodec *codec)
@@ -736,8 +810,13 @@ void droid_media_codec_destroy(DroidMediaCodec *codec)
 void droid_media_codec_queue(DroidMediaCodec *codec, DroidMediaCodecData *data, DroidMediaBufferCallbacks *cb)
 {
     InputBuffer *buffer = new InputBuffer(data->data.data, data->data.size, cb->data, cb->unref);
+#if ANDROID_MAJOR >= 9
+    buffer->meta_data().setInt32(android::kKeyIsSyncFrame, data->sync ? 1 : 0);
+    buffer->meta_data().setInt64(android::kKeyTime, data->ts);
+#else
     buffer->meta_data()->setInt32(android::kKeyIsSyncFrame, data->sync ? 1 : 0);
     buffer->meta_data()->setInt64(android::kKeyTime, data->ts);
+#endif
     buffer->setObserver(codec);
     buffer->set_range(0, data->data.size);
     buffer->add_ref();
@@ -768,8 +847,11 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
     int err;
     android::MediaBuffer *buffer = NULL;
 
+#if ANDROID_MAJOR >= 9
+    err = codec->m_codec->read((android::MediaBufferBase **)&buffer);
+#else
     err = codec->m_codec->read(&buffer);
-
+#endif
     if (err == android::INFO_FORMAT_CHANGED) {
         ALOGI("Format changed from codec");
 	if (codec->notifySizeChanged()) {
@@ -802,6 +884,7 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
 	    return DROID_MEDIA_CODEC_LOOP_EOS;
         } else {
             ALOGE("Error 0x%x reading from codec", -err);
+
             if (codec->m_cb.error) {
                 codec->m_cb.error(codec->m_cb_data, err);
             }
@@ -818,7 +901,12 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
 	return DROID_MEDIA_CODEC_LOOP_OK;
     }
 
+#if ANDROID_MAJOR >= 9
+    // Obtaining graphic buffer currently disabled because of API changes
+    android::sp<android::GraphicBuffer> buff = NULL;
+#else
     android::sp<android::GraphicBuffer> buff = buffer->graphicBuffer();
+#endif
     if (buff == NULL) {
         if (codec->m_data_cb.data_available) {
             DroidMediaCodecData data;
@@ -827,7 +915,11 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
             data.ts = 0;
             data.decoding_ts = 0;
 
+#if ANDROID_MAJOR >= 9
+            if (!buffer->meta_data().findInt64(android::kKeyTime, &data.ts)) {
+#else
             if (!buffer->meta_data()->findInt64(android::kKeyTime, &data.ts)) {
+#endif
                 // I really don't know what to do here and I doubt we will reach that anyway.
                 ALOGE("Received a buffer without a timestamp!");
             } else {
@@ -835,7 +927,11 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
                 data.ts *= 1000;
             }
 
+#if ANDROID_MAJOR >= 9
+            buffer->meta_data().findInt64(android::kKeyDecodingTime, &data.decoding_ts);
+#else
             buffer->meta_data()->findInt64(android::kKeyDecodingTime, &data.decoding_ts);
+#endif
             if (data.decoding_ts) {
                 // Convert from usec to nsec.
                 data.decoding_ts *= 1000;
@@ -843,19 +939,27 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
 
             int32_t sync = 0;
             data.sync = false;
+#if ANDROID_MAJOR >= 9
+            buffer->meta_data().findInt32(android::kKeyIsSyncFrame, &sync);
+#else
             buffer->meta_data()->findInt32(android::kKeyIsSyncFrame, &sync);
+#endif
             if (sync) {
                 data.sync = true;
             }
 
             int32_t codecConfig = 0;
             data.codec_config = false;
+#if ANDROID_MAJOR >= 9
+            if (buffer->meta_data().findInt32(android::kKeyIsCodecConfig, &codecConfig)
+#else
             if (buffer->meta_data()->findInt32(android::kKeyIsCodecConfig, &codecConfig)
+#endif
                 && codecConfig) {
                 data.codec_config = true;
             }
 
-            ALOGV("sync? %i, codec config? %i, ts = %lli", sync, codecConfig, data.ts);
+            ALOGV("sync? %i, codec config? %i, ts = %" PRId64, sync, codecConfig, data.ts);
 
             codec->m_data_cb.data_available (codec->m_data_cb_data, &data);
         } else {
@@ -863,7 +967,11 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
         }
     } else {
         int64_t timestamp = 0;
+#if ANDROID_MAJOR >= 9
+        if (!buffer->meta_data().findInt64(android::kKeyTime, &timestamp)) {
+#else
         if (!buffer->meta_data()->findInt64(android::kKeyTime, &timestamp)) {
+#endif
             // I really don't know what to do here and I doubt we will reach that anyway.
             ALOGE("Received a buffer without a timestamp!");
         } else {
@@ -876,11 +984,14 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
 				     , -1 /* TODO: Where do we get the fence from? */
 #endif
 );
-
         if (err != android::NO_ERROR) {
             ALOGE("queueBuffer failed with error 0x%d", -err);
         } else {
+#if ANDROID_MAJOR >= 9
+            buffer->meta_data().setInt32(android::kKeyRendered, 1);
+#else
             buffer->meta_data()->setInt32(android::kKeyRendered, 1);
+#endif
         }
     }
 
@@ -909,9 +1020,7 @@ void droid_media_codec_flush(DroidMediaCodec *codec)
 
 void droid_media_codec_drain(DroidMediaCodec *codec)
 {
-    // This will cause read to return error to OMX and OMX will signal EOS
-    // In practice we can get any other error instead of ERROR_END_OF_STREAM
-    codec->m_src->add(NULL);
+    codec->m_src->drain();
 }
 
 void droid_media_codec_get_output_info(DroidMediaCodec *codec,

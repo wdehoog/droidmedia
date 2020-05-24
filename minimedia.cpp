@@ -40,6 +40,7 @@
 
 #include <cutils/properties.h>
 
+#undef LOG_TAG
 #define LOG_TAG "MinimediaService"
 
 using namespace android;
@@ -57,8 +58,13 @@ main(int, char**)
     property_set("persist.media.metrics.enabled", "0");
     property_set("camera.fifo.disable", "1");
 
+#if ANDROID_MAJOR >= 9
+    FakeActivityManager::instantiate();
+#endif
+    
     MediaPlayerService::instantiate();
     CameraService::instantiate();
+    AudioPolicyService::instantiate();
     AudioPolicyService::instantiate();
 
 // PermissionController and AppOps are needed on Android 4, but aren't allowed to be run here.
@@ -66,7 +72,9 @@ main(int, char**)
     FakePermissionController::instantiate();
     FakeAppOps::instantiate();
     FakeBatteryStats::instantiate();
+#ifndef SENSORSERVER_DISABLE
     FakeSensorServer::instantiate();
+#endif
 #endif
 
 #if ANDROID_MAJOR >= 6
@@ -89,6 +97,7 @@ main(int, char**)
 #if ANDROID_MAJOR >= 8
     sp<android::frameworks::sensorservice::V1_0::ISensorManager> sensorManager = new FakeSensorManager;
     status_t status = sensorManager->registerAsService();
+    (void)status;
 #endif
 #if ANDROID_MAJOR >= 7
     sp<hardware::ICameraService> gCameraService = interface_cast<hardware::ICameraService>(binder);

@@ -16,9 +16,6 @@
  * Authored by: Mohammed Hassan <mohammed.hassan@jolla.com>
  */
 
-#define LOG_NDEBUG 0
-#define LOG_TAG "minisfservice"
-
 #if ANDROID_MAJOR < 8
 #include "allocator.h"
 #include <ui/GraphicBuffer.h>
@@ -81,6 +78,8 @@ DroidMediaAllocator::createGraphicBuffer(uint32_t w, uint32_t h,
 {
     int s;
 ALOGE("DroidMediaAllocator::createGraphicBuffer(w=%d, h=%d, f=0x%X, u=%d) m_size=%d", w, h, format, usage, m_size);
+    //usage |= android::GraphicBuffer::USAGE_HW_TEXTURE;
+
     // Copied from SurfaceFlinger.cpp
     android::sp<android::GraphicBuffer> graphicBuffer;
 

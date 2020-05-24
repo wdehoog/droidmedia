@@ -23,32 +23,31 @@
 #include <gui/BufferQueue.h>
 #include "droidmedia.h"
 
+#if ANDROID_MAJOR >= 6
+typedef android::BufferItem DroidMediaBufferItem;
+#else
+typedef android::BufferQueue::BufferItem DroidMediaBufferItem;
+#endif
+
 struct _DroidMediaBuffer : public ANativeWindowBuffer
 {
 public:
-#if ANDROID_MAJOR < 6
-  _DroidMediaBuffer(android::BufferQueue::BufferItem& buffer,
-#else
-  _DroidMediaBuffer(android::BufferItem& buffer,
-#endif
-		   android::sp<DroidMediaBufferQueue> queue,
-		   void *data,
-		   DroidMediaCallback ref,
-		   DroidMediaCallback unref);
+  _DroidMediaBuffer(DroidMediaBufferItem& buffer,
+                   android::sp<DroidMediaBufferQueue> queue);
 
-  _DroidMediaBuffer(android::sp<android::GraphicBuffer>& buffer,
-		   void *data,
-		   DroidMediaCallback ref,
-		   DroidMediaCallback unref);
+  _DroidMediaBuffer(android::sp<android::GraphicBuffer>& buffer);
 
   ~_DroidMediaBuffer();
 
   static void incRef(struct android_native_base_t* base);
   static void decRef(struct android_native_base_t* base);
 
+  void update(const DroidMediaBufferItem& buffer);
+
   android::sp<android::GraphicBuffer> m_buffer;
   android::sp<DroidMediaBufferQueue> m_queue;
 
+  mutable volatile int32_t m_refCount;
   uint32_t m_transform;
   uint32_t m_scalingMode;
   int64_t m_timestamp;
@@ -57,9 +56,8 @@ public:
   android::Rect m_crop;
 
   int m_slot;
-  void *m_data;
-  DroidMediaCallback m_ref;
-  DroidMediaCallback m_unref;
+  void *m_userData;
+
 };
 
 #endif /* DROID_MEDIA_BUFFER_H */

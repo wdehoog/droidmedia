@@ -36,6 +36,7 @@
 #include "droidmediabuffer.h"
 #include "private.h"
 
+#undef LOG_TAG
 #define LOG_TAG "DroidMediaCamera"
 
 namespace android {
@@ -295,14 +296,11 @@ bool droid_media_camera_get_info(DroidMediaCameraInfo *info, int camera_number)
 
 DroidMediaCamera *droid_media_camera_connect(int camera_number)
 {
-    android::sp<DroidMediaBufferQueueListener> listener(new DroidMediaBufferQueueListener);
-
     android::sp<DroidMediaBufferQueue>
       queue(new DroidMediaBufferQueue("DroidMediaCameraBufferQueue"));
+    android::sp<DroidMediaBufferQueueListener> listener(new DroidMediaBufferQueueListener(queue.get()));
     if (!queue->connectListener()) {
         ALOGE("Failed to connect buffer queue listener");
-        queue.clear();
-        listener.clear();
         return NULL;
     }
 
